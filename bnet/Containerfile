@@ -1,0 +1,50 @@
+# ============================================================
+# spp-bnet Container
+# Ubuntu 24.04 LTS + Wine 11
+# Runs: bnetserver.exe (via Wine) with VC++ runtimes
+# ============================================================
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV WINEPREFIX=/root/.wine
+ENV WINEARCH=win64
+ENV DISPLAY=
+
+# Enable 32-bit support
+RUN dpkg --add-architecture i386
+
+# Install Wine 11 + winetricks dependencies
+RUN apt-get update && apt-get install -y \
+    wget gnupg2 software-properties-common ca-certificates \
+    cabextract unzip curl xvfb \
+    && mkdir -pm755 /etc/apt/keyrings \
+    && wget -O /etc/apt/keyrings/winehq-archive.key \
+        https://dl.winehq.org/wine-builds/winehq.key \
+    && wget -NP /etc/apt/sources.list.d/ \
+        https://dl.winehq.org/wine-builds/ubuntu/dists/noble/winehq-noble.sources \
+    && apt-get update && apt-get install -y --install-recommends \
+        winehq-stable \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install winetricks
+RUN wget -q https://raw.githubusercontent.com/Winetricks/winetricks/master/src/winetricks \
+    -O /usr/local/bin/winetricks \
+    && chmod +x /usr/local/bin/winetricks
+
+# Initialize Wine prefix
+RUN wineboot --init 2>/dev/null || true
+
+# Install Windows runtimes
+RUN xvfb-run winetricks -q vcrun2019 ucrtbase 2>/dev/null || true
+RUN xvfb-run winetricks -q vcrun2022 2>/dev/null || true
+
+RUN mkdir -p /opt/spp
+
+COPY scripts/bnet-entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# bnetserver ports
+EXPOSE 1119 3724 1120
+
+WORKDIR /opt/spp
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

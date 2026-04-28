@@ -1,0 +1,59 @@
+# ============================================================
+# spp-database Container
+# Ubuntu 24.04 LTS — Linux-native stack (no Wine needed here)
+# Replaces: mysqld.exe → MariaDB, Apache24 → Apache2, php7 → PHP
+# Notepad++ is GUI-only and not needed in a headless container.
+# ============================================================
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Linux-native replacements for every Windows binary in the .bat:
+#
+#   SPP-Database (mysqld) → MariaDB 10.11 LTS
+#   Apache24              → apache2
+#   php7                  → php + php-mysql
+#   7za.exe               → p7zip-full  (7z command)
+#   Notepad++.exe         → NOT installed — headless server needs no text editor GUI
+#                           If you need one: nano / vim are available
+#
+RUN apt-get update && apt-get install -y \
+    mariadb-server \
+    apache2 \
+    php \
+    libapache2-mod-php \
+    php-mysql \
+    p7zip-full \
+    curl \
+    nano \
+    vim \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create directory structure mirroring the original bat layout
+RUN mkdir -p /opt/spp/Database \
+             /opt/spp/Tools/Apache24 \
+             /opt/spp/Tools/php7 \
+             /opt/spp/Logs
+
+# ── Apache2 configuration ──────────────────────────────────
+# Enable mod_php and mod_rewrite for web panel
+RUN a2enmod php* rewrite 2>/dev/null || true
+
+# Copy SPP Apache vhost config (generated below)
+COPY config/apache-spp.conf /etc/apache2/sites-available/spp.conf
+RUN a2ensite spp && a2dissite 000-default
+
+# ── MariaDB / SPP-Database configuration ──────────────────
+# The original bat reads SPP-Database.ini — we mount the user's
+# server files at /opt/spp so that file path is preserved.
+# MariaDB is pointed at the data directory from those files.
+COPY scripts/database-entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Ports:
+#   3310 — MariaDB (matches the bat's "Port: 3310")
+#   80   — Apache web panel
+EXPOSE 3310 80
+
+WORKDIR /opt/spp
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
