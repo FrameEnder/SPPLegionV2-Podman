@@ -4,7 +4,7 @@
   <br>
   <b>SPPLegionV2-Podman</b>
   <br>
-  <p>A Script For Installing, and Managing SPPLegionV2 in Podman</p>
+  <p>Install and Manage SPPLegionV2 in Podman</p>
 </h1>
 
 <h1 align="center">
