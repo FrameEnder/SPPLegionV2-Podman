@@ -66,7 +66,7 @@ Requirements
 </p>
 
 
-4) ATM tailscale is required for IPv4 Routing, so you will need a Free Account, after making one goto https://login.tailscale.com/admin/settings/keys to create an Auth Key should start with ```tskey-auth-######```
+4) ATM tailscale is required for IPv4 Routing, so you will need a Free Account, and to have Tailscale on your Client PC for connection, after making one goto https://login.tailscale.com/admin/settings/keys to create an Auth Key should start with ```tskey-auth-######```
 then use ```./spp-manage.sh set-ts-key <key>``` with your authkey replacing <key> 
 <br>
 5) Now use ```./spp-manage.sh``` this will open the CLI Menu
