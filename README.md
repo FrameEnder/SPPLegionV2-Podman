@@ -68,7 +68,7 @@ Requirements
 
 4) ATM tailscale is required for IPv4 Routing, so you will need a Free Account, and to have Tailscale on your Client PC for connection, after making one goto https://login.tailscale.com/admin/settings/keys to create an Auth Key should start with ```tskey-auth-######```
 then use ```./spp-manage.sh set-ts-key <key>``` with your authkey replacing <key> 
-<br>
+
 5) Now use ```./spp-manage.sh``` this will open the CLI Menu
 <br>
 <p align="Left">
@@ -78,7 +78,7 @@ then use ```./spp-manage.sh set-ts-key <key>``` with your authkey replacing <key
 </p>
 
 6) Choose ```1 - Start Server``` in the menu it will start creating the Podman Images and populating them with all the required dependencies, this will take awhile, but you should see some connection settings when everything is done the blue globe icon will be your server IP, as well as your Database Connection IP
-<br>
+
 7) you will need to close, and re-open the ```./spp-manage.sh``` this won't turn off your server, now goto ```3 - Server Settings``` > ```2 - Edit bnetserver.conf``` then scroll down till you the LoginREST credentials change 127.0.0.1 to your Server IPv4 from Tailscale found on the main menu, or at the previous server start screen
 <br>
 <p align="Left">
@@ -96,7 +96,7 @@ then use ```./spp-manage.sh set-ts-key <key>``` with your authkey replacing <key
 </p>
 
 9) once that is done go back to your terminal, and run ```./spp-manage.sh restart```, and that will restart your server with those IPv4 Addresses
-<br>
+
 10) then just open your ```config.wtf``` in your WoW 7.3.5 client, and change the portal entry from 127.0.0.1 to your IPv4, and your Ready to Go
 <br>
 <p align="Left">
