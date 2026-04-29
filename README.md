@@ -79,7 +79,7 @@ then use ```./spp-manage.sh set-ts-key <key>``` with your authkey replacing <key
 
 6) Choose ```1 - Start Server``` in the menu it will start creating the Podman Images and populating them with all the required dependencies, this will take awhile, but you should see some connection settings when everything is done the blue globe icon will be your server IP, as well as your Database Connection IP
 
-7) you will need to close, and re-open the ```./spp-manage.sh``` this won't turn off your server, now goto ```3 - Server Settings``` > ```2 - Edit bnetserver.conf``` then scroll down till you the LoginREST credentials change 127.0.0.1 to your Server IPv4 from Tailscale found on the main menu, or at the previous server start screen
+7) you will need to close, and re-open the ```./spp-manage.sh``` this won't turn off your server, now goto ```3 - Server Settings``` > ```2 - Edit bnetserver.conf``` then scroll down till you see the LoginREST credentials change 127.0.0.1 to your Server IPv4 from Tailscale found on the main menu, or at the previous server start screen
 <br>
 <p align="Left">
   <a href="https://raw.githubusercontent.com/FrameEnder/SPPLegionV2-Podman/refs/heads/main/Meta/Tutorial/6.png">
