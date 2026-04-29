@@ -833,22 +833,24 @@ cmd_server_settings() {
         echo "   Realm: $realm_name"
         echo ""
         echo "   1 - Change Realm Name"
-        echo "   2 - Edit bnetserver.conf"
-        echo "   3 - Edit worldserver.conf"
-        echo "   4 - Database info"
-        echo "   5 - Server logs"
-        echo "   6 - Import custom SQL"
+        echo "   2 - Change Server IP"
+        echo "   3 - Edit bnetserver.conf"
+        echo "   4 - Edit worldserver.conf"
+        echo "   5 - Database info"
+        echo "   6 - Server logs"
+        echo "   7 - Import custom SQL"
         echo ""
         echo "   0 - Back"
         echo ""
         read -rp "  Choice: " opt
         case "$opt" in
             1) cmd_change_realmname ;;
-            2) cmd_edit_conf "bnetserver.conf" ;;
-            3) cmd_edit_conf "worldserver.conf" ;;
-            4) cmd_db_info ;;
-            5) cmd_logs ;;
-            6) cmd_sql_import ;;
+            2) cmd_change_ip ;;
+            3) cmd_edit_conf "bnetserver.conf" ;;
+            4) cmd_edit_conf "worldserver.conf" ;;
+            5) cmd_db_info ;;
+            6) cmd_logs ;;
+            7) cmd_sql_import ;;
             0) return ;;
         esac
     done
@@ -1775,6 +1777,139 @@ cmd_update() {
 
 
 # ────────────────────────────────────────────────────────────
+# CHANGE SERVER IP
+# Updates 4 locations:
+#   1. bnetserver.conf → LoginREST.ExternalAddress
+#   2. bnetserver.conf → LoginREST.LocalAddress
+#   3. legion_auth.realmlist → address
+#   4. legion_auth.realmlist → localAddress
+# ────────────────────────────────────────────────────────────
+cmd_change_ip() {
+    clear
+    section "Change Server IP"
+
+    # Show current values
+    local conf="$SPP_HOST_PATH/Servers/bnetserver.conf"
+    local current_ip=""
+
+    if [ -f "$conf" ]; then
+        current_ip=$(grep -E "^LoginREST\.ExternalAddress" "$conf"             | sed 's/.*= *//' | tr -d '[:space:]')
+    fi
+
+    # Fall back to DB if conf not readable
+    if [ -z "$current_ip" ] && ctr_running "$CTR_DATABASE"; then
+        current_ip=$(podman exec "$CTR_DATABASE"             mysql --socket=/run/mysqld/mysqld.sock             --user=spp_user --password=123456             --database=legion_auth             --silent --skip-column-names             -e "SELECT address FROM realmlist WHERE id=1;" 2>/dev/null | tr -d '[:space:]')
+    fi
+
+    echo "  Current IP : ${current_ip:-unknown}"
+    echo ""
+    echo "  This will update:"
+    echo "   • bnetserver.conf → LoginREST.ExternalAddress"
+    echo "   • bnetserver.conf → LoginREST.LocalAddress"
+    echo "   • legion_auth.realmlist → address"
+    echo "   • legion_auth.realmlist → localAddress"
+    echo ""
+
+    local new_ip=""
+
+    # ── Offer Tailscale IP if available ──────────────────
+    local ts_ip=""
+    if [ -n "$TS_AUTHKEY" ] && ctr_running "$CTR_TAILSCALE" 2>/dev/null; then
+        ts_ip=$(podman exec "$CTR_TAILSCALE" tailscale ip -4 2>/dev/null || true)
+    fi
+
+    if [ -n "$ts_ip" ]; then
+        echo "  🌐 Tailscale is active — detected IP: $ts_ip"
+        echo ""
+        echo "   1 - Use Tailscale IP ($ts_ip)"
+        echo "   2 - Enter a custom IP"
+        echo "   0 - Cancel"
+        echo ""
+        read -rp "  Choice: " ip_choice </dev/tty
+        case "$ip_choice" in
+            1) new_ip="$ts_ip" ;;
+            2) ;;   # fall through to custom entry below
+            0|"") echo "  Cancelled." && read -rp "  Press Enter..." && return ;;
+            *) echo "  Invalid choice." && read -rp "  Press Enter..." && return 1 ;;
+        esac
+    fi
+
+    # ── Custom IP entry ───────────────────────────────────
+    if [ -z "$new_ip" ]; then
+        echo ""
+        read -rp "  New IP address (Enter to cancel): " new_ip </dev/tty
+        [ -z "$new_ip" ] && echo "  Cancelled." && read -rp "  Press Enter..." && return
+    fi
+
+    # Basic IPv4 validation
+    if ! echo "$new_ip" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; then
+        echo "  ❌ '$new_ip' does not look like a valid IPv4 address."
+        read -rp "  Press Enter..."; return 1
+    fi
+
+    echo ""
+    echo "  Updating to: $new_ip"
+    echo ""
+
+    # ── 1 & 2: bnetserver.conf ────────────────────────────
+    if [ ! -f "$conf" ]; then
+        echo "  ⚠️  bnetserver.conf not found at: $conf"
+        echo "     Skipping conf update."
+    else
+        # Update ExternalAddress
+        if grep -q "^LoginREST\.ExternalAddress" "$conf"; then
+            sed -i "s|^LoginREST\.ExternalAddress.*|LoginREST.ExternalAddress = $new_ip|" "$conf"
+            echo "  ✅ bnetserver.conf → LoginREST.ExternalAddress = $new_ip"
+        else
+            echo "LoginREST.ExternalAddress = $new_ip" >> "$conf"
+            echo "  ✅ bnetserver.conf → LoginREST.ExternalAddress = $new_ip (appended)"
+        fi
+
+        # Update LocalAddress
+        if grep -q "^LoginREST\.LocalAddress" "$conf"; then
+            sed -i "s|^LoginREST\.LocalAddress.*|LoginREST.LocalAddress = $new_ip|" "$conf"
+            echo "  ✅ bnetserver.conf → LoginREST.LocalAddress = $new_ip"
+        else
+            echo "LoginREST.LocalAddress = $new_ip" >> "$conf"
+            echo "  ✅ bnetserver.conf → LoginREST.LocalAddress = $new_ip (appended)"
+        fi
+    fi
+
+    # ── 3 & 4: realmlist table ────────────────────────────
+    _ensure_database || { read -rp "  Press Enter..."; return 1; }
+
+    podman exec "$CTR_DATABASE"         mysql --socket=/run/mysqld/mysqld.sock         --user=spp_user --password=123456         --database=legion_auth         -e "UPDATE realmlist SET address='$new_ip', localAddress='$new_ip' WHERE id=1;"         2>/dev/null
+
+    if [ $? -eq 0 ]; then
+        echo "  ✅ legion_auth.realmlist → address = $new_ip"
+        echo "  ✅ legion_auth.realmlist → localAddress = $new_ip"
+    else
+        echo "  ❌ Database update failed."
+        read -rp "  Press Enter..."; return 1
+    fi
+
+    echo ""
+    echo "  ✅ All 4 settings updated to: $new_ip"
+    echo ""
+    echo "  Restart bnetserver to apply the conf changes:"
+
+    if ctr_running "$CTR_BNET"; then
+        read -rp "  Restart bnetserver now? (y/N): " restart_bnet </dev/tty
+        if [[ "$restart_bnet" =~ ^[Yy]$ ]]; then
+            echo "  Restarting bnetserver..."
+            podman restart "$CTR_BNET" 2>/dev/null || true
+            echo "  ✅ Bnetserver restarted."
+        fi
+    else
+        echo "  (bnetserver is not running — changes will apply on next start)"
+    fi
+
+    echo ""
+    read -rp "  Press Enter..."
+}
+
+
+# ────────────────────────────────────────────────────────────
 # Command dispatch
 # ────────────────────────────────────────────────────────────
 case "${1:-menu}" in
@@ -1803,6 +1938,7 @@ case "${1:-menu}" in
     accounts)         cmd_accounts ;;
     saves)            cmd_saves ;;
     realm)            cmd_change_realmname ;;
+    change-ip)        cmd_change_ip ;;
     help|--help|-h)
         echo ""
         echo "SPP-LegionV2 Server Manager"
@@ -1813,7 +1949,8 @@ case "${1:-menu}" in
         echo "  settings               Realm name, edit conf files"
         echo "  accounts               Create/list/GM accounts"
         echo "  saves                  Save/load/delete DB snapshots (9 slots)"
-        echo "  realm                  Quick realm name change"
+        echo "  realm                  Quick realm name change
+  change-ip              Change server IP (bnetserver.conf + realmlist DB)"
         echo ""
         echo "── Container Control ─────────────────────────────────"
         echo "  start                  Start all containers"
