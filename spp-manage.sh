@@ -958,35 +958,119 @@ cmd_create_account() {
     clear
     section "Create Account"
     _ensure_database || { read -rp "  Press Enter..."; return; }
-    read -rp "  Username: " username
-    [ -z "$username" ] && return
-    read -rsp "  Password: " password; echo ""
-    [ -z "$password" ] && return
-    read -rp "  Email (optional): " email
 
-    # Use worldserver console if running, otherwise direct SQL
-    # TrinityCore stores passwords as SHA1(UPPER(user):UPPER(pass)) in Bnet format
-    if ctr_running "$CTR_WORLD"; then
+    # ── SHA-256 helper (mirrors Extensions.cs sha256_hash) ──────────────────
+    # sha256_hex <string>  → lowercase hex digest
+    _sha256_hex() {
+        if command -v openssl &>/dev/null; then
+            printf '%s' "$1" | openssl dgst -sha256 -hex | awk '{print $NF}'
+        elif command -v sha256sum &>/dev/null; then
+            printf '%s' "$1" | sha256sum | awk '{print $1}'
+        else
+            echo "  ❌ Neither openssl nor sha256sum found." >&2
+            return 1
+        fi
+    }
+
+    # reverse_hex_pairs <hex>  → hex string with every byte-pair reversed
+    # e.g. "aabbcc" → "ccbbaa"  (mirrors the C# reverse loop with i+=2)
+    _reverse_hex_pairs() {
+        local hex="$1" reversed="" len="${#1}"
+        for (( i=len-2; i>=0; i-=2 )); do
+            reversed+="${hex:$i:2}"
+        done
+        echo "$reversed"
+    }
+
+    # ── Account creation loop (mirrors AddAccount while loop in C#) ──────────
+    while true; do
         echo ""
-        echo "  Creating via worldserver console..."
-        podman exec "$CTR_WORLD" \
-            bash -c "echo 'account create $username $password' > /tmp/worldserver-stdin" \
+        read -rp  "  BattleNet Email (login): " raw_email
+        [ -z "$raw_email" ] && return
+
+        read -rsp "  Password:                " raw_pass; echo ""
+        if [ -z "$raw_pass" ]; then
+            echo "  ⚠️  Login or password was empty. Please try again."
+            continue
+        fi
+
+        # Uppercase both — mirrors .ToUpper() throughout the C# code
+        local login_name="${raw_email^^}"
+        local pass_upper="${raw_pass^^}"
+
+        # Duplicate check — mirrors:
+        #   SELECT IFNULL((SELECT email FROM battlenet_accounts WHERE email='{loginName}'),"-1")
+        local existing
+        existing=$(podman exec "$CTR_DATABASE" \
+            mysql $DB_CREDS --silent --skip-column-names \
+            --database=legion_auth \
+            -e "SELECT IFNULL((SELECT \`email\` FROM \`battlenet_accounts\` WHERE \`email\`='${login_name}'),'-1');" \
+            2>/dev/null)
+
+        if [ "$existing" != "-1" ]; then
+            echo "  ⚠️  BattleNet login \"${login_name}\" already exists. Please try again."
+            continue
+        fi
+
+        # ── Build the password hash (exact port of the C# two-pass SHA-256) ──
+        #   step1 = SHA256(UPPER(email))           → lowercase hex → uppercased
+        #   step2 = SHA256(step1 + ":" + UPPER(pass))  with reverse=true
+        #   final = UPPER(reversed_step2)
+        local step1 step1_upper step2_raw step2_rev pass_hash
+        step1=$(_sha256_hex "$login_name")          || { read -rp "  Press Enter..."; return 1; }
+        step1_upper="${step1^^}"
+        step2_raw=$(_sha256_hex "${step1_upper}:${pass_upper}")
+        step2_rev=$(_reverse_hex_pairs "$step2_raw")
+        pass_hash="${step2_rev^^}"
+
+        # ── INSERT 1: battlenet_accounts (must come first to get its auto-ID) ─
+        #   INSERT INTO `legion_auth`.`battlenet_accounts`
+        #     (`email`,`sha_pass_hash`) VALUES ('{loginName}','{passHash}')
+        podman exec "$CTR_DATABASE" \
+            mysql $DB_CREDS --silent \
+            --database=legion_auth \
+            -e "INSERT INTO \`battlenet_accounts\` (\`email\`,\`sha_pass_hash\`) VALUES ('${login_name}','${pass_hash}');" \
             2>/dev/null
-        sleep 2
-        echo "  ✅ Account creation command sent."
-        echo "  Check worldserver logs to confirm: ./spp-manage.sh logs spp-world"
-    else
+
+        # ── Retrieve the new battlenet ID ─────────────────────────────────────
+        #   SELECT `id` FROM `legion_auth`.`battlenet_accounts` WHERE `email`='{loginName}'
+        local bnet_id
+        bnet_id=$(podman exec "$CTR_DATABASE" \
+            mysql $DB_CREDS --silent --skip-column-names \
+            --database=legion_auth \
+            -e "SELECT \`id\` FROM \`battlenet_accounts\` WHERE \`email\`='${login_name}';" \
+            2>/dev/null)
+
+        if [ -z "$bnet_id" ]; then
+            echo "  ❌ Failed to retrieve new battlenet_accounts ID. Aborting."
+            read -rp "  Press Enter..."; return 1
+        fi
+
+        # ── INSERT 2: account, linked to the battlenet row ────────────────────
+        #   INSERT INTO `legion_auth`.`account`
+        #     (`username`,`email`,`battlenet_account`)
+        #     VALUES ('{loginName}','{loginName}','{battlenetID}')
+        podman exec "$CTR_DATABASE" \
+            mysql $DB_CREDS --silent \
+            --database=legion_auth \
+            -e "INSERT INTO \`account\` (\`username\`,\`email\`,\`battlenet_account\`) VALUES ('${login_name}','${login_name}','${bnet_id}');" \
+            2>/dev/null
+
+        local acct_id
+        acct_id=$(podman exec "$CTR_DATABASE" \
+            mysql $DB_CREDS --silent --skip-column-names \
+            --database=legion_auth \
+            -e "SELECT \`id\` FROM \`account\` WHERE \`username\`='${login_name}' ORDER BY \`id\` DESC LIMIT 1;" \
+            2>/dev/null)
+
         echo ""
-        echo "  ⚠️  Worldserver not running — inserting directly into database."
-        echo "  Note: Password will be set as plaintext SHA hash."
-        local sha_pass
-        sha_pass=$(echo -n "${username^^}:${password^^}" | sha1sum | awk '{print toupper($1)}')
-        db_query_db "legion_auth" \
-            "INSERT INTO account (username, sha_pass_hash, email, joindate, expansion)
-             VALUES ('${username^^}', '$sha_pass', '$email', NOW(), 8)
-             ON DUPLICATE KEY UPDATE sha_pass_hash='$sha_pass';"
-        echo "  ✅ Account '${username^^}' created."
-    fi
+        echo "  ✅ Account created successfully!"
+        echo "     Email (login)  : ${login_name}"
+        echo "     account.id     : ${acct_id}"
+        echo "     battlenet_id   : ${bnet_id}"
+        break
+    done
+
     echo ""
     read -rp "  Press Enter..."
 }
