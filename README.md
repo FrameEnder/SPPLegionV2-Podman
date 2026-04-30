@@ -114,6 +114,8 @@ then use ```./spp-manage.sh set-ts-key <key>``` with your authkey replacing <key
 <br>
   ```realm```                  - Quick realm name change
 <br>
+  ```change-ip```              - Change server IP (bnetserver.conf + realmlist DB)
+<br>
 <br>
 ── Container Control ─────────────────────────────────
 <br>
@@ -148,17 +150,9 @@ then use ```./spp-manage.sh set-ts-key <key>``` with your authkey replacing <key
 ── Database ──────────────────────────────────────────
 <br>
 <br>
-  ```fix-db [file.sql]```      - Create missing legion_auth tables
-<br>
-  ```fix-proc```               - Fix mysql.proc column mismatch (run if saves/backup fail)
-<br>
-  ```grant-local```            - Grant spp_user local socket access to all databases
-<br>
   ```update```                 - Download and apply latest SPP-LegionV2 server update
 <br>
   ```sql-import [file]```      - Run a custom .sql file against any SPP database
-<br>
-  ```upgrade-db```             - Run mariadb-upgrade on system tables
 <br>
   ```ts-ip```                  - Show Tailscale IP
 <br>
