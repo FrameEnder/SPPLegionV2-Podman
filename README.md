@@ -66,8 +66,8 @@ Requirements
 </p>
 
 
-4) ATM tailscale is required for IPv4 Routing, so you will need a Free Account, and to have Tailscale on your Client PC for connection, after making one goto https://login.tailscale.com/admin/settings/keys to create an Auth Key should start with ```tskey-auth-######```
-then use ```./spp-manage.sh set-ts-key <key>``` with your authkey replacing <key> 
+4) (OPTIONAL) as of [the latest commit](https://github.com/FrameEnder/SPPLegionV2-Podman/commit/8b9ed11dd6433aa973fcb80978ed28b05d573674) tailscale can be used for IPv4 Routing over the internet, if you want to use it you will need a Free Account, and to have Tailscale on your Client PC for connection, after making one goto https://login.tailscale.com/admin/settings/keys to create an Auth Key should start with ```tskey-auth-######```
+then use ```./spp-manage.sh set-ts-key <key>``` if you don't want this don't worry it will be skipped during container creation automatically if you don't add a key
 
 5) Now use ```./spp-manage.sh``` this will open the TUI Menu
 <br>
