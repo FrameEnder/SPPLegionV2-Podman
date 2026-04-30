@@ -223,10 +223,10 @@ cmd_start() {
     if [ "$mode" = "tailscale" ]; then
         mkdir -p "$TS_STATE_DIR"
         if podman container exists "$CTR_TAILSCALE" 2>/dev/null; then
-            echo "ℹ️  $CTR_TAILSCALE exists — starting..."
-            podman start "$CTR_TAILSCALE"
+            printf "  [0/3] Starting Tailscale sidecar..."
+            podman start "$CTR_TAILSCALE" &>/dev/null
         else
-            echo "▶ [0/3] Starting spp-tailscale sidecar..."
+            printf "  [0/3] Starting Tailscale sidecar..."
             podman run -d \
                 --pod "$POD_NAME" \
                 --name "$CTR_TAILSCALE" \
@@ -237,24 +237,23 @@ cmd_start() {
                 -v "$TS_STATE_DIR:/var/lib/tailscale:z" \
                 -e TS_AUTHKEY="$TS_AUTHKEY" \
                 -e TS_HOSTNAME="$TS_HOSTNAME" \
-                "$IMG_TAILSCALE"
+                "$IMG_TAILSCALE" &>/dev/null
         fi
 
-        echo "   Waiting for Tailscale to connect (up to 60s)..."
         for i in $(seq 1 60); do
             local ts_ip
             ts_ip="$(podman exec "$CTR_TAILSCALE" tailscale ip -4 2>/dev/null || true)"
             if [ -n "$ts_ip" ] && [ "$ts_ip" != "pending..." ]; then
-                echo ""
-                echo "   ✅ Tailscale connected! Pod IP: $ts_ip"
-                echo ""
+                printf " ✅\n"
                 break
             fi
             printf "."; sleep 1
         done
 
         if [ -z "$(podman exec "$CTR_TAILSCALE" tailscale ip -4 2>/dev/null || true)" ]; then
-            echo ""
+            printf " ⚠️\n"
+            clear
+            print_header
             echo "⚠️  Tailscale not yet connected. Check logs:"
             echo "   ./spp-manage.sh logs spp-tailscale"
             echo ""
@@ -268,37 +267,38 @@ cmd_start() {
     fi
 
     # ── STEP 1: spp-database ─────────────────────────────────
+    printf "  [1/3] Starting database..."
     if podman container exists "$CTR_DATABASE" 2>/dev/null; then
-        echo "ℹ️  $CTR_DATABASE exists — starting..."
-        podman start "$CTR_DATABASE"
+        podman start "$CTR_DATABASE" &>/dev/null
     else
-        echo "▶ [1/3] Starting spp-database (MariaDB + Apache)..."
         podman run -d \
             --pod "$POD_NAME" \
             --name "$CTR_DATABASE" \
             --restart unless-stopped \
             -v "$VOL" \
             -e SPP_ROOT="$SPP_CONTAINER_PATH" \
-            "$IMG_DATABASE"
+            "$IMG_DATABASE" &>/dev/null
     fi
 
-    echo "   Waiting for MariaDB..."
     retries=0
     until podman exec "$CTR_DATABASE" \
             mysqladmin --port=3310 --user=spp_user --password=123456 ping \
             --silent 2>/dev/null; do
         retries=$((retries+1))
-        [ "$retries" -ge 60 ] && echo "" && \
-            echo "⚠️  DB timeout. Check: ./spp-manage.sh logs spp-database" && break
+        if [ "$retries" -ge 60 ]; then
+            printf " ⚠️\n"
+            echo "⚠️  DB timeout. Check: ./spp-manage.sh logs spp-database"
+            break
+        fi
         printf "."; sleep 2
     done
-    echo ""
+    printf " ✅\n"
 
     # ── STEP 2: spp-bnet ─────────────────────────────────────
+    printf "  [2/3] Starting bnetserver..."
     if podman container exists "$CTR_BNET" 2>/dev/null; then
-        podman start "$CTR_BNET"
+        podman start "$CTR_BNET" &>/dev/null
     else
-        echo "▶ [2/3] Starting spp-bnet (bnetserver.exe via Wine)..."
         podman run -d \
             --pod "$POD_NAME" \
             --name "$CTR_BNET" \
@@ -306,15 +306,16 @@ cmd_start() {
             -v "$VOL" \
             -e SPP_ROOT="$SPP_CONTAINER_PATH" \
             -e WINEDEBUG=-all \
-            "$IMG_BNET"
+            "$IMG_BNET" &>/dev/null
     fi
-    echo "   Giving bnetserver 5 seconds..."; sleep 5
+    sleep 5
+    printf " ✅\n"
 
     # ── STEP 3: spp-world ────────────────────────────────────
+    printf "  [3/3] Starting worldserver..."
     if podman container exists "$CTR_WORLD" 2>/dev/null; then
-        podman start "$CTR_WORLD"
+        podman start "$CTR_WORLD" &>/dev/null
     else
-        echo "▶ [3/3] Starting spp-world (worldserver.exe via Wine)..."
         podman run -d \
             --pod "$POD_NAME" \
             --name "$CTR_WORLD" \
@@ -322,11 +323,13 @@ cmd_start() {
             -v "$VOL" \
             -e SPP_ROOT="$SPP_CONTAINER_PATH" \
             -e WINEDEBUG=-all \
-            "$IMG_WORLD"
+            "$IMG_WORLD" &>/dev/null
     fi
+    printf " ✅\n"
 
     # ── Print connection info ────────────────────────────────
-    echo ""
+    clear
+    print_header
     echo "✅ All containers started."
     echo ""
     echo "┌─────────────────────────────────────────────────────┐"
@@ -678,13 +681,23 @@ _ensure_tailscale() {
     if ctr_running "$CTR_TAILSCALE"; then
         return 0
     fi
-    echo "  🌐 Tailscale not running — starting sidecar..."
+    printf "  🌐 Starting Tailscale sidecar..."
     _ensure_pod
     mkdir -p "$SCRIPT_DIR/.tailscale-state"
     if podman container exists "$CTR_TAILSCALE" 2>/dev/null; then
-        podman start "$CTR_TAILSCALE" 2>/dev/null || true
+        podman start "$CTR_TAILSCALE" &>/dev/null || true
     else
-        podman run -d             --pod "$POD_NAME"             --name "$CTR_TAILSCALE"             --restart unless-stopped             --cap-add NET_ADMIN             --cap-add NET_RAW             --device /dev/net/tun             -v "$SCRIPT_DIR/.tailscale-state:/var/lib/tailscale:z"             -e TS_AUTHKEY="$TS_AUTHKEY"             -e TS_HOSTNAME="$TS_HOSTNAME"             "$IMG_TAILSCALE" 2>/dev/null || true
+        podman run -d \
+            --pod "$POD_NAME" \
+            --name "$CTR_TAILSCALE" \
+            --restart unless-stopped \
+            --cap-add NET_ADMIN \
+            --cap-add NET_RAW \
+            --device /dev/net/tun \
+            -v "$SCRIPT_DIR/.tailscale-state:/var/lib/tailscale:z" \
+            -e TS_AUTHKEY="$TS_AUTHKEY" \
+            -e TS_HOSTNAME="$TS_HOSTNAME" \
+            "$IMG_TAILSCALE" &>/dev/null || true
     fi
     # Wait up to 15s for Tailscale to connect (don't block too long)
     local ts_retries=0
@@ -692,13 +705,15 @@ _ensure_tailscale() {
         local ts_ip
         ts_ip=$(podman exec "$CTR_TAILSCALE" tailscale ip -4 2>/dev/null || true)
         if [ -n "$ts_ip" ]; then
-            echo "  ✅ Tailscale connected: $ts_ip"
+            printf " ✅\n"
+            clear
             return 0
         fi
         printf "."; sleep 1
         ts_retries=$((ts_retries+1))
     done
-    echo ""
+    printf " ⚠️\n"
+    clear
     echo "  ⚠️  Tailscale not yet connected — check: ./spp-manage.sh logs spp-tailscale"
 }
 
@@ -707,23 +722,34 @@ _ensure_database() {
     if ctr_running "$CTR_DATABASE"; then
         return 0
     fi
-    echo "  ℹ️  Database not running — starting it now..."
+    printf "  ⏳ Starting database..."
     _ensure_pod
     _ensure_tailscale
     if podman container exists "$CTR_DATABASE" 2>/dev/null; then
-        podman start "$CTR_DATABASE" 2>/dev/null || true
+        podman start "$CTR_DATABASE" &>/dev/null || true
     else
-        podman run -d             --pod "$POD_NAME"             --name "$CTR_DATABASE"             --restart unless-stopped             -v "$SPP_HOST_PATH:$SPP_CONTAINER_PATH:z"             -e SPP_ROOT="$SPP_CONTAINER_PATH"             "$IMG_DATABASE" 2>/dev/null || true
+        podman run -d \
+            --pod "$POD_NAME" \
+            --name "$CTR_DATABASE" \
+            --restart unless-stopped \
+            -v "$SPP_HOST_PATH:$SPP_CONTAINER_PATH:z" \
+            -e SPP_ROOT="$SPP_CONTAINER_PATH" \
+            "$IMG_DATABASE" &>/dev/null || true
     fi
-    echo "  ⏳ Waiting for MariaDB..."
     local retries=0
-    until podman exec "$CTR_DATABASE"             mysqladmin --socket=/run/mysqld/mysqld.sock             --user=spp_user --password=123456 ping --silent 2>/dev/null; do
+    until podman exec "$CTR_DATABASE" \
+            mysqladmin --socket=/run/mysqld/mysqld.sock \
+            --user=spp_user --password=123456 ping --silent 2>/dev/null; do
         retries=$((retries+1))
-        [ "$retries" -ge 60 ] && echo "  ❌ Database did not start in time." && return 1
+        if [ "$retries" -ge 60 ]; then
+            printf " ❌\n"
+            echo "  ❌ Database did not start in time."
+            return 1
+        fi
         printf "."; sleep 2
     done
-    echo ""
-    echo "  ✅ Database ready."
+    printf " ✅\n"
+    clear
 }
 
 # ── Ensure the pod exists before starting any container ─────
@@ -742,8 +768,15 @@ _srv_start() {
             else
                 _ensure_pod
                 _ensure_tailscale
-                echo "  Starting database..."
-                podman start "$CTR_DATABASE" 2>/dev/null ||                     podman run -d --pod "$POD_NAME" --name "$CTR_DATABASE"                         --restart unless-stopped                         -v "$SPP_HOST_PATH:$SPP_CONTAINER_PATH:z"                         -e SPP_ROOT="$SPP_CONTAINER_PATH"                         "$IMG_DATABASE"
+                printf "  Starting database..."
+                podman start "$CTR_DATABASE" &>/dev/null || \
+                    podman run -d --pod "$POD_NAME" --name "$CTR_DATABASE" \
+                        --restart unless-stopped \
+                        -v "$SPP_HOST_PATH:$SPP_CONTAINER_PATH:z" \
+                        -e SPP_ROOT="$SPP_CONTAINER_PATH" \
+                        "$IMG_DATABASE" &>/dev/null
+                printf " ✅\n"
+                clear
             fi ;;
         bnet)
             if ctr_running "$CTR_BNET"; then
@@ -758,8 +791,15 @@ _srv_start() {
                 fi
                 _ensure_pod
                 _ensure_tailscale
-                echo "  Starting bnet..."
-                podman start "$CTR_BNET" 2>/dev/null ||                     podman run -d --pod "$POD_NAME" --name "$CTR_BNET"                         --restart unless-stopped                         -v "$SPP_HOST_PATH:$SPP_CONTAINER_PATH:z"                         -e SPP_ROOT="$SPP_CONTAINER_PATH"                         -e WINEDEBUG=-all "$IMG_BNET"
+                printf "  Starting bnet..."
+                podman start "$CTR_BNET" &>/dev/null || \
+                    podman run -d --pod "$POD_NAME" --name "$CTR_BNET" \
+                        --restart unless-stopped \
+                        -v "$SPP_HOST_PATH:$SPP_CONTAINER_PATH:z" \
+                        -e SPP_ROOT="$SPP_CONTAINER_PATH" \
+                        -e WINEDEBUG=-all "$IMG_BNET" &>/dev/null
+                printf " ✅\n"
+                clear
             fi ;;
         world)
             if ctr_running "$CTR_WORLD"; then
@@ -778,8 +818,15 @@ _srv_start() {
                 fi
                 _ensure_pod
                 _ensure_tailscale
-                echo "  Starting world..."
-                podman start "$CTR_WORLD" 2>/dev/null ||                     podman run -d --pod "$POD_NAME" --name "$CTR_WORLD"                         --restart unless-stopped                         -v "$SPP_HOST_PATH:$SPP_CONTAINER_PATH:z"                         -e SPP_ROOT="$SPP_CONTAINER_PATH"                         -e WINEDEBUG=-all "$IMG_WORLD"
+                printf "  Starting world..."
+                podman start "$CTR_WORLD" &>/dev/null || \
+                    podman run -d --pod "$POD_NAME" --name "$CTR_WORLD" \
+                        --restart unless-stopped \
+                        -v "$SPP_HOST_PATH:$SPP_CONTAINER_PATH:z" \
+                        -e SPP_ROOT="$SPP_CONTAINER_PATH" \
+                        -e WINEDEBUG=-all "$IMG_WORLD" &>/dev/null
+                printf " ✅\n"
+                clear
             fi ;;
         web)
             echo "  Starting Apache..."
@@ -940,10 +987,10 @@ cmd_accounts() {
 }
 
 cmd_list_accounts() {
+    _ensure_database || { read -rp "  Press Enter..."; return; }
     clear
     section "Accounts"
-    _ensure_database || { read -rp "  Press Enter..."; return; }
-    echo "   ID   Username              Email                         Last Login"
+    #echo "   ID   Username              Email                         Last Login"
     echo "   ─────────────────────────────────────────────────────────────────"
     podman exec "$CTR_DATABASE" \
         mysql $DB_CREDS --database=legion_auth \
@@ -955,9 +1002,9 @@ cmd_list_accounts() {
 }
 
 cmd_create_account() {
+    _ensure_database || { read -rp "  Press Enter..."; return; }
     clear
     section "Create Account"
-    _ensure_database || { read -rp "  Press Enter..."; return; }
 
     # ── SHA-256 helper (mirrors Extensions.cs sha256_hash) ──────────────────
     # sha256_hex <string>  → lowercase hex digest
@@ -1905,7 +1952,7 @@ cmd_change_ip() {
     if [ -n "$ts_ip" ]; then
         echo "  🌐 Tailscale is active — detected IP: $ts_ip"
         echo ""
-        echo "   1 - Use Tailscale IP ($ts_ip)"
+        echo "   1 - Use Tailscale IP"
         echo "   2 - Enter a custom IP"
         echo "   0 - Cancel"
         echo ""
@@ -2052,12 +2099,12 @@ case "${1:-menu}" in
         echo "  set-iface <nic>        Host NIC for macvlan"
         echo ""
         echo "── Database ──────────────────────────────────────────"
-        echo "  fix-db [file.sql]      Create missing legion_auth tables
-  fix-proc               Fix mysql.proc column mismatch (run if saves/backup fail)
-  grant-local            Grant spp_user local socket access to all databases
-  update                 Download and apply latest SPP-LegionV2 server update
-  sql-import [file]      Run a custom .sql file against any SPP database
-  upgrade-db             Run mariadb-upgrade on system tables"
+       #echo "  fix-db [file.sql]      Create missing legion_auth tables"
+       #echo "  fix-proc               Fix mysql.proc column mismatch (run if saves/backup fail)"
+       #echo "  grant-local            Grant spp_user local socket access to all databases"
+        echo "  update                 Download and apply latest SPP-LegionV2 server update"
+        echo "  sql-import [file]      Run a custom .sql file against any SPP database"
+       #echo "  upgrade-db             Run mariadb-upgrade on system tables"
         echo "  ts-ip                  Show Tailscale IP"
         echo "  ts-login               Interactive Tailscale login"
         echo ""
