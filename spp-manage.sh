@@ -168,6 +168,9 @@ create_pod() {
                 -p 1120:1120
                 -p 8085:8085
                 -p 7878:7878
+                -p 8198:8198
+                -p 8086:8086
+                -p 8081:8081
             )
             ;;
         macvlan)
@@ -183,6 +186,9 @@ create_pod() {
                 -p 1120:1120
                 -p 8085:8085
                 -p 7878:7878
+                -p 8198:8198
+                -p 8086:8086
+                -p 8081:8081
             )
             ;;
     esac
@@ -756,7 +762,7 @@ _ensure_database() {
 _ensure_pod() {
     if ! podman pod exists "$POD_NAME" 2>/dev/null; then
         echo "  🚀 Creating pod: $POD_NAME"
-        podman pod create             --name "$POD_NAME"             -p 3310:3310             -p 8080:80               -p 1119:1119             -p 3724:3724             -p 1120:1120             -p 8085:8085             -p 7878:7878
+        podman pod create             --name "$POD_NAME"             -p 3310:3310             -p 8080:80               -p 1119:1119             -p 3724:3724             -p 1120:1120             -p 8085:8085             -p 7878:7878             -p 8198:8198             -p 8086:8086             -p 8081:8081
     fi
 }
 
