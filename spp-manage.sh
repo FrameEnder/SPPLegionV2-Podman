@@ -26,6 +26,8 @@ SPP_POD_IP="${SPP_POD_IP:-}"
 SPP_HOST_IFACE="${SPP_HOST_IFACE:-}"
 TS_AUTHKEY="${TS_AUTHKEY:-}"
 TS_HOSTNAME="${TS_HOSTNAME:-spp-server}"
+TS_ENABLED="${TS_ENABLED:-false}"
+TS_LOGIN="${TS_LOGIN:-false}"
 
 SPP_CONTAINER_PATH="/opt/spp/server"
 TS_STATE_DIR="$SCRIPT_DIR/.tailscale-state"
@@ -50,6 +52,8 @@ SPP_POD_IP="$SPP_POD_IP"
 SPP_HOST_IFACE="$SPP_HOST_IFACE"
 TS_AUTHKEY="$TS_AUTHKEY"
 TS_HOSTNAME="$TS_HOSTNAME"
+TS_ENABLED="$TS_ENABLED"
+TS_LOGIN="$TS_LOGIN"
 CONF
 }
 
@@ -63,12 +67,33 @@ detect_iface() {
 }
 
 networking_mode() {
-    if [ -n "$TS_AUTHKEY" ]; then
+    # Tailscale only counts as the active mode when the user has it
+    # toggled on AND a credential exists (auth key or completed login).
+    if [ "$TS_ENABLED" = "true" ] && { [ -n "$TS_AUTHKEY" ] || [ "$TS_LOGIN" = "true" ]; }; then
         echo "tailscale"
     elif [ -n "$SPP_POD_IP" ]; then
         echo "macvlan"
     else
         echo "hostport"
+    fi
+}
+
+# Returns "Active" (green) or "Disabled" — used by the Tailscale settings menu
+# to show the live state of the master toggle.
+ts_mode_label() {
+    if [ "$TS_ENABLED" = "true" ] && { [ -n "$TS_AUTHKEY" ] || [ "$TS_LOGIN" = "true" ]; }; then
+        echo "Active"
+    else
+        echo "Disabled"
+    fi
+}
+
+# Returns "Signed-In" if any credential is present, else "Sign-In"
+ts_signin_label() {
+    if [ -n "$TS_AUTHKEY" ] || [ "$TS_LOGIN" = "true" ]; then
+        echo "Signed-In"
+    else
+        echo "Sign-In"
     fi
 }
 
@@ -451,10 +476,18 @@ cmd_ts_login() {
     fi
     echo "Opening Tailscale login — copy the URL and open it in your browser:"
     echo ""
-    podman exec "$CTR_TAILSCALE" tailscale up \
+    if podman exec "$CTR_TAILSCALE" tailscale up \
         --hostname="$TS_HOSTNAME" \
         --accept-routes \
-        --accept-dns=false
+        --accept-dns=false; then
+        # Mark login as completed and default the toggle to enabled
+        TS_LOGIN="true"
+        TS_ENABLED="true"
+        save_config
+        echo ""
+        echo "✅ Tailscale login completed."
+        echo "   Tailscale Mode : Active (auto-enabled)"
+    fi
 }
 
 # ────────────────────────────────────────────────────────────
@@ -477,9 +510,23 @@ Current key: ${TS_AUTHKEY:+set (hidden)}${TS_AUTHKEY:-not set}
 HELP
     [ -z "$1" ] && exit 1
 
-    TS_AUTHKEY="$1"; save_config
+    # Allow clearing the key explicitly
+    if [ "$1" = "clear" ]; then
+        TS_AUTHKEY=""
+        # Auto-disable the toggle if no credential remains
+        [ "$TS_LOGIN" != "true" ] && TS_ENABLED="false"
+        save_config
+        echo "✅ Tailscale auth key cleared."
+        return 0
+    fi
+
+    TS_AUTHKEY="$1"
+    # Per design: when a key is first set, Tailscale Mode defaults to Enabled.
+    TS_ENABLED="true"
+    save_config
     echo "✅ Tailscale auth key saved."
-    echo "   Networking mode is now: tailscale"
+    echo "   Tailscale Mode    : Active (auto-enabled)"
+    echo "   Networking mode   : tailscale"
     echo "   Run './spp-manage.sh restart' to apply."
     echo ""
     echo "   To remove the key and go back to macvlan/hostport:"
@@ -892,6 +939,7 @@ cmd_server_settings() {
         echo "   5 - Database info"
         echo "   6 - Server logs"
         echo "   7 - Import custom SQL"
+        echo "   8 - Tailscale"
         echo ""
         echo "   0 - Back"
         echo ""
@@ -904,9 +952,303 @@ cmd_server_settings() {
             5) cmd_db_info ;;
             6) cmd_logs ;;
             7) cmd_sql_import ;;
+            8) cmd_tailscale_settings ;;
             0) return ;;
         esac
     done
+}
+
+# ────────────────────────────────────────────────────────────
+# TAILSCALE SETTINGS  (bat: tailscale_settings)
+# Three controls:
+#   1) Tailscale Mode  — master toggle [Active]/[Disabled]
+#   2) Auth Key/Login  — credential status [Sign-In]/[Signed-In]
+#   3) Hostname        — node name shown in Tailscale admin
+# ────────────────────────────────────────────────────────────
+cmd_tailscale_settings() {
+    while true; do
+        local mode_label signin_label
+        mode_label="$(ts_mode_label)"
+        signin_label="$(ts_signin_label)"
+
+        clear
+        section "Tailscale"
+        echo "   Tailscale lets the pod expose itself on your tailnet"
+        echo "   so you can connect from anywhere with a stable IP."
+        echo ""
+        echo "   1 - Tailscale Mode      [$mode_label]"
+        echo "   2 - Auth Key/Login      [$signin_label]"
+        echo "   3 - Hostname            [$TS_HOSTNAME]"
+        echo ""
+        echo "   0 - Back"
+        echo ""
+        read -rp "  Choice: " opt
+        case "$opt" in
+            1) cmd_ts_toggle_mode ;;
+            2) cmd_ts_credential ;;
+            3) cmd_ts_change_hostname ;;
+            0) return ;;
+        esac
+    done
+}
+
+# ── 1) Toggle Tailscale Mode ────────────────────────────────
+# Flips TS_ENABLED. Requires a credential to flip ON. Flipping OFF is
+# always allowed and does NOT erase the saved key/login — it just
+# stops Tailscale from being the active networking mode.
+cmd_ts_toggle_mode() {
+    clear
+    section "Tailscale Mode"
+
+    local has_cred="false"
+    if [ -n "$TS_AUTHKEY" ] || [ "$TS_LOGIN" = "true" ]; then
+        has_cred="true"
+    fi
+
+    if [ "$TS_ENABLED" = "true" ] && [ "$has_cred" = "true" ]; then
+        echo "   Current state : [Active]"
+        echo ""
+        echo "   Disabling will stop Tailscale from starting on the"
+        echo "   next start/restart. Your saved key/login is preserved."
+        echo ""
+        read -rp "  Disable Tailscale Mode? (y/N): " c
+        if [[ "$c" =~ ^[Yy]$ ]]; then
+            TS_ENABLED="false"
+            save_config
+            echo ""
+            echo "   ✅ Tailscale Mode is now [Disabled]."
+        else
+            echo "   Cancelled."
+        fi
+        echo ""
+        read -rp "  Press Enter..."
+        return
+    fi
+
+    # Currently disabled — user wants to enable
+    echo "   Current state : [Disabled]"
+    echo ""
+
+    if [ "$has_cred" = "false" ]; then
+        # No credential — must obtain one before enabling
+        echo "   ⚠️  No Tailscale auth key or login is set."
+        echo "      Tailscale Mode cannot be enabled until you sign in."
+        echo ""
+        echo "   1 - Set Auth Key now"
+        echo "   2 - Run interactive Login (CLI)"
+        echo "   0 - Cancel"
+        echo ""
+        read -rp "  Choice: " sub
+        case "$sub" in
+            1) _ts_prompt_authkey
+               # Re-evaluate: if a key was set, the credential function
+               # already flipped TS_ENABLED=true, so we're done.
+               ;;
+            2) _ts_prompt_login ;;
+            0|"") echo "   Cancelled." ;;
+            *)    echo "   Invalid choice." ;;
+        esac
+        echo ""
+        read -rp "  Press Enter..."
+        return
+    fi
+
+    # Has credential, just disabled — flip it on
+    read -rp "  Enable Tailscale Mode? (Y/n): " c
+    if [[ -z "$c" || "$c" =~ ^[Yy]$ ]]; then
+        TS_ENABLED="true"
+        save_config
+        echo ""
+        echo "   ✅ Tailscale Mode is now [Active]."
+        echo "      Run a restart to apply: ./spp-manage.sh restart"
+    else
+        echo "   Cancelled."
+    fi
+    echo ""
+    read -rp "  Press Enter..."
+}
+
+# ── 2) Auth Key / Login ────────────────────────────────────
+# When a credential exists, lets the user inspect / clear / replace it.
+# When no credential exists, lets the user pick Auth Key vs Login.
+cmd_ts_credential() {
+    clear
+    section "Auth Key / Login"
+
+    local has_cred="false"
+    if [ -n "$TS_AUTHKEY" ] || [ "$TS_LOGIN" = "true" ]; then
+        has_cred="true"
+    fi
+
+    if [ "$has_cred" = "true" ]; then
+        echo "   Current state : [Signed-In]"
+        if [ -n "$TS_AUTHKEY" ]; then
+            echo "   Method        : Auth Key (saved, hidden)"
+        fi
+        if [ "$TS_LOGIN" = "true" ]; then
+            echo "   Method        : Interactive Login (CLI)"
+        fi
+        echo ""
+        echo "   1 - Replace with new Auth Key"
+        echo "   2 - Replace with interactive Login (CLI)"
+        echo "   3 - Sign out (clear credential)"
+        echo "   0 - Back"
+        echo ""
+        read -rp "  Choice: " sub
+        case "$sub" in
+            1) _ts_prompt_authkey ;;
+            2) _ts_prompt_login ;;
+            3) _ts_signout ;;
+            0|"") return ;;
+            *) echo "   Invalid choice." ;;
+        esac
+        echo ""
+        read -rp "  Press Enter..."
+        return
+    fi
+
+    # No credential
+    echo "   Current state : [Sign-In]"
+    echo ""
+    echo "   Choose how to authenticate to Tailscale:"
+    echo ""
+    echo "   1 - Auth Key      (paste a pre-auth key from tailscale.com)"
+    echo "   2 - Login         (run 'tailscale up' inside the container,"
+    echo "                      copy the URL, complete login in browser)"
+    echo "   0 - Cancel"
+    echo ""
+    read -rp "  Choice: " sub
+    case "$sub" in
+        1) _ts_prompt_authkey ;;
+        2) _ts_prompt_login ;;
+        0|"") echo "   Cancelled." ;;
+        *) echo "   Invalid choice." ;;
+    esac
+    echo ""
+    read -rp "  Press Enter..."
+}
+
+# Prompt for and apply a new Tailscale auth key.
+_ts_prompt_authkey() {
+    echo ""
+    echo "   Get a key here:"
+    echo "     https://login.tailscale.com/admin/settings/keys"
+    echo ""
+    read -rp "   Auth key (Enter to cancel): " key
+    if [ -z "$key" ]; then
+        echo "   Cancelled."
+        return
+    fi
+    TS_AUTHKEY="$key"
+    # Default to enabled when a credential is first set
+    TS_ENABLED="true"
+    save_config
+    echo ""
+    echo "   ✅ Auth key saved."
+    echo "   ✅ Tailscale Mode is now [Active]."
+    echo "      Run a restart to apply: ./spp-manage.sh restart"
+}
+
+# Run interactive CLI login. Requires the Tailscale container to be up.
+_ts_prompt_login() {
+    echo ""
+    if ! podman container exists "$CTR_TAILSCALE" 2>/dev/null; then
+        echo "   ⚠️  The spp-tailscale container is not running."
+        echo "      Interactive login uses the CLI inside that container."
+        echo ""
+        echo "      Options:"
+        echo "        • Start the stack first (./spp-manage.sh start), then"
+        echo "          come back and choose Login again."
+        echo "        • Or use an Auth Key instead — no container needed."
+        return
+    fi
+    echo "   Running 'tailscale up' inside spp-tailscale."
+    echo "   Copy the URL it prints and open it in your browser."
+    echo ""
+    if podman exec "$CTR_TAILSCALE" tailscale up \
+        --hostname="$TS_HOSTNAME" \
+        --accept-routes \
+        --accept-dns=false; then
+        TS_LOGIN="true"
+        TS_ENABLED="true"
+        save_config
+        echo ""
+        echo "   ✅ Login completed."
+        echo "   ✅ Tailscale Mode is now [Active]."
+    else
+        echo ""
+        echo "   ⚠️  Login did not complete. Credential not saved."
+    fi
+}
+
+# Clear all Tailscale credentials and disable the toggle.
+_ts_signout() {
+    echo ""
+    read -rp "   This clears the saved key/login. Continue? (y/N): " c
+    if [[ ! "$c" =~ ^[Yy]$ ]]; then
+        echo "   Cancelled."
+        return
+    fi
+    # If the container is up, also log out the running tailscaled so the
+    # node leaves the tailnet cleanly.
+    if podman container exists "$CTR_TAILSCALE" 2>/dev/null \
+       && ctr_running "$CTR_TAILSCALE"; then
+        podman exec "$CTR_TAILSCALE" tailscale logout 2>/dev/null || true
+    fi
+    TS_AUTHKEY=""
+    TS_LOGIN="false"
+    TS_ENABLED="false"
+    save_config
+    echo ""
+    echo "   ✅ Signed out. Tailscale Mode is now [Disabled]."
+}
+
+# ── 3) Hostname ─────────────────────────────────────────────
+cmd_ts_change_hostname() {
+    clear
+    section "Tailscale Hostname"
+    echo "   Current hostname : [$TS_HOSTNAME]"
+    echo ""
+    echo "   This is the name the pod appears as in the Tailscale"
+    echo "   admin console (https://login.tailscale.com/admin/machines)."
+    echo ""
+    read -rp "  New hostname (Enter to cancel): " newhost
+    if [ -z "$newhost" ]; then
+        echo "   Cancelled."
+        echo ""
+        read -rp "  Press Enter..."
+        return
+    fi
+
+    # Tailscale hostnames: letters, digits, hyphens; can't start/end with hyphen.
+    if ! echo "$newhost" | grep -qE '^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$'; then
+        echo "   ❌ Invalid hostname."
+        echo "      Use letters, digits, and hyphens only (no leading/trailing hyphen)."
+        echo ""
+        read -rp "  Press Enter..."
+        return
+    fi
+
+    local old_host="$TS_HOSTNAME"
+    TS_HOSTNAME="$newhost"
+    save_config
+    echo ""
+    echo "   ✅ Hostname changed: $old_host → $newhost"
+
+    # If Tailscale is currently running, push the new hostname live.
+    if podman container exists "$CTR_TAILSCALE" 2>/dev/null \
+       && ctr_running "$CTR_TAILSCALE"; then
+        echo "   Applying new hostname to running tailscaled..."
+        if podman exec "$CTR_TAILSCALE" tailscale set --hostname="$newhost" 2>/dev/null; then
+            echo "   ✅ Live update applied."
+        else
+            echo "   ⚠️  Live update failed — will take effect on next restart."
+        fi
+    else
+        echo "   (Will take effect on next start/restart.)"
+    fi
+    echo ""
+    read -rp "  Press Enter..."
 }
 
 cmd_change_realmname() {
