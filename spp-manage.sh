@@ -940,6 +940,7 @@ cmd_server_settings() {
         echo "   6 - Server logs"
         echo "   7 - Import custom SQL"
         echo "   8 - Tailscale"
+        echo "   9 - Game Build"
         echo ""
         echo "   0 - Back"
         echo ""
@@ -953,6 +954,7 @@ cmd_server_settings() {
             6) cmd_logs ;;
             7) cmd_sql_import ;;
             8) cmd_tailscale_settings ;;
+            9) cmd_change_gamebuild ;;
             0) return ;;
         esac
     done
@@ -1267,6 +1269,83 @@ cmd_change_realmname() {
         "UPDATE realmlist SET name='$newname' WHERE id=1;"
     echo ""
     echo "  ✅ Realm name changed to: $newname"
+    read -rp "  Press Enter..."
+}
+
+# ────────────────────────────────────────────────────────────
+# Change the WoW client build the realm advertises.
+# Updates legion_auth.realmlist.gamebuild for id=1.
+#
+# Build choices:
+#   26365
+#   26972
+#
+# The client MUST match this number or it won't connect.
+# ────────────────────────────────────────────────────────────
+cmd_change_gamebuild() {
+    # SPP convention from cmd_change_realmname etc: ensure DB is up before we
+    # try to read or write. _ensure_database starts the pod, tailscale sidecar
+    # (if enabled), and the database container, then waits for mysqladmin ping.
+    _ensure_database || { read -rp "  Press Enter..."; return; }
+
+    local current
+    current=$(db_query_db "legion_auth" \
+        "SELECT gamebuild FROM realmlist WHERE id=1;" 2>/dev/null \
+        | tr -d '[:space:]')
+    [ -z "$current" ] && current="unknown"
+
+    clear
+    section "Game Build"
+    echo "   Current build : $current"
+    echo ""
+    echo "   Pick the WoW 7.3.5 client build the realm should advertise."
+    echo "   Your client version MUST match this number to connect."
+    echo ""
+    echo "   1 - 26365"
+    echo "   2 - 26972"
+    echo ""
+    echo "   0 - Cancel"
+    echo ""
+    read -rp "  Choice: " opt
+
+    local new_build=""
+    case "$opt" in
+        1) new_build="26365" ;;
+        2) new_build="26972" ;;
+        0|"") echo "  Cancelled."; read -rp "  Press Enter..."; return ;;
+        *) echo "  Invalid choice."; read -rp "  Press Enter..."; return ;;
+    esac
+
+    # Skip the write if it's already on the chosen build
+    if [ "$current" = "$new_build" ]; then
+        echo ""
+        echo "  ℹ️  Build is already $new_build — nothing to do."
+        read -rp "  Press Enter..."
+        return
+    fi
+
+    echo ""
+    echo "  Updating: $current → $new_build"
+
+    if db_query_db "legion_auth" \
+            "UPDATE realmlist SET gamebuild=$new_build WHERE id=1;"; then
+        # Verify the write actually landed
+        local verify
+        verify=$(db_query_db "legion_auth" \
+            "SELECT gamebuild FROM realmlist WHERE id=1;" 2>/dev/null \
+            | tr -d '[:space:]')
+        if [ "$verify" = "$new_build" ]; then
+            echo "  ✅ realmlist.gamebuild = $new_build"
+            echo ""
+            echo "  ⚠️  Restart the bnet/world servers for clients to pick this up:"
+            echo "     ./spp-manage.sh restart"
+        else
+            echo "  ⚠️  Update ran but verify came back as: ${verify:-empty}"
+        fi
+    else
+        echo "  ❌ Update failed. Check: ./spp-manage.sh logs spp-database"
+    fi
+    echo ""
     read -rp "  Press Enter..."
 }
 
