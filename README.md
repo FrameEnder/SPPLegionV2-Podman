@@ -37,7 +37,7 @@ Requirements
 * Podman Installed
 * 7z (Or any tool that can extract tar.gz)
 * SPPLegionV2
-* Tailscale Account (For IPv4 Routing)
+* Tailscale Account (Optional)
 
 1) Once you have all the requirements, Place the archive tar.gz anywhere on your PC / Server. Then simply extract the contents perferably into an Empty Folder with your tool of choice.
 <br>
