@@ -1,9 +1,7 @@
 
 <h1 align="center">
   <br>
-  <p align="left">
   <img src="Meta/SPPLegionV2.png" width="420">
-</p>
   <br>
   <b>SPPLegionV2-Podman</b>
   <br>
@@ -17,13 +15,9 @@
 </h1>
 
 <p align="center">
-  <p align="left">
   <img src="Meta/1.png" width="800">
-</p>
     <br>
-  <p align="left">
   <img src="Meta/2.png" width="400">
-</p>
 </p>
 
 # Features
