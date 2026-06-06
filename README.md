@@ -13,6 +13,7 @@
 <h1 align="center">
  <a href="https://github.com/FrameEnder/SPPLegionV2-Podman/releases/latest">
         <img src="https://img.shields.io/badge/Download-Latest-green" width="140">
+ </a>
 </h1>
 
 <p align="center">
